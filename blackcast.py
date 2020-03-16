@@ -26,14 +26,14 @@ asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
 # Configuration arguments
 
-parser = argparse.ArgumentParser(description="Natrium/Kalium Wallet Server")
+parser = argparse.ArgumentParser(description="BitcoinBlack Wallet Server")
 parser.add_argument('-b', '--banano', action='store_true', help='Run for BANANO (Kalium-mode)', default=False)
 parser.add_argument('--host', type=str, help='Host to listen on (e.g. 127.0.0.1)', default='127.0.0.1')
-parser.add_argument('--path', type=str, help='(Optional) Path to run application on (for unix socket, e.g. /tmp/natriumapp.sock', default=None)
+parser.add_argument('--path', type=str, help='(Optional) Path to run application on (for unix socket, e.g. /tmp/blackapp.sock', default=None)
 parser.add_argument('-p', '--port', type=int, help='Port to listen on', default=5076)
 parser.add_argument('--redis-host', type=str, help='Redis (e.g. 127.0.0.1)', default='127.0.0.1')
 parser.add_argument('-rp', '--redis-port', type=int, help='Port redis is running on', default=6379)
-parser.add_argument('--log-file', type=str, help='Log file location', default='natriumcast.log')
+parser.add_argument('--log-file', type=str, help='Log file location', default='blackcast.log')
 options = parser.parse_args()
 
 try:
@@ -52,7 +52,7 @@ try:
         print(f'Starting KALIUM Server (BANANO) {server_desc}')
     else:
         banano_mode = False
-        print(f'Starting NATRIUM Server (NANO) {server_desc}')
+        print(f'Starting BitcoinBlack Server (NANO) {server_desc}')
 except Exception:
     parser.print_help()
     sys.exit(0)
@@ -61,7 +61,7 @@ price_prefix = 'coingecko:nano' if not banano_mode else 'coingecko:banano'
 
 # Environment configuration
 
-rpc_url = os.getenv('RPC_URL', 'http://[::1]:7076')
+rpc_url = os.getenv('RPC_URL', 'http://[::1]:37000')
 work_url = os.getenv('WORK_URL', None)
 fcm_api_key = os.getenv('FCM_API_KEY', None)
 fcm_sender_id = os.getenv('FCM_SENDER_ID', None)
@@ -525,7 +525,7 @@ async def callback(r : web.Request):
                 )
                 await fcm.send_message(message)
             notification_title = f"Received {util.raw_to_nano(send_amount)} {'NANO' if not banano_mode else 'BANANO'}"
-            notification_body = f"Open {'Natrium' if not banano_mode else 'Kalium'} to view this transaction."
+            notification_body = f"Open {'BitcoinBlack' if not banano_mode else 'Kalium'} to view this transaction."
             for t2 in fcm_tokens_v2:
                 message = aiofcm.Message(
                     device_token = t2,

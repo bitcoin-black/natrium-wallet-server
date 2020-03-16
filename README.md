@@ -1,14 +1,4 @@
-# Natrium (NANO) and Kalium (BANANO) Wallet Server
-
-## What is Natrium, Kalium, NANO, BANANO?
-
-Natrium and Kalium are mobile wallets written with Flutter. NANO and BANANO are cryptocurrencies.
-
-| Link | Description |
-| :----- | :------ |
-[natrium.io](https://natrium.io) | Natrium Homepage
-[kalium.banano.cc](https://kalium.banano.cc) | Kalium Homepage
-[appditto.com](https://appditto.com) | Appditto Homepage
+# Bitcoin Black (BCB) Wallet Server
 
 ## Requirements
 
@@ -39,17 +29,17 @@ Generally:
 4) Run
 
 ```
-sudo adduser natriumuser # Add natriumuser
-sudo usermod -aG sudo natriumuser # Add natriumuser to sudo group
-sudo usermod -aG www-data natriumuser # Add natriumuser to www-data group
-sudo su - natriumuser # Change to natriumuser
-git clone https://github.com/appditto/natrium-wallet-server.git natriumcast # Clone repository
+sudo adduser blackuser # Add blackuser
+sudo usermod -aG sudo blackuser # Add blackuser to sudo group
+sudo usermod -aG www-data blackuser # Add blackuser to www-data group
+sudo su - blackuser # Change to blackuser
+git clone https://github.com/bitcoin-black/natrium-wallet-server.git blackcast # Clone repository
 ```
 
 Ensure python3.6 or newer is installed (`python3 --version`) and
 
 ```
-cd natriumcast
+cd blackcast
 virtualenv -p python3 venv
 source venv/bin/activate
 pip install -r requirements.txt
@@ -57,7 +47,7 @@ pip install -r requirements.txt
 
 You must configure using environment variables. You may do this manually, as part of a launching script, in your bash settings, or within a systemd service.
 
-Create the file `.env` in the same directory as `natriumcast.py` with the contents:
+Create the file `.env` in the same directory as `blackcast.py` with the contents:
 
 ```
 RPC_URL=http://[::1]:7076 # NANO/BANANO node RPC URL
@@ -72,19 +62,19 @@ The recommended configuration is to run the server behind [nginx](https://www.ng
 
 Next, we'll define a systemd service unit
 
-/etc/systemd/system/natriumcast@.service
+/etc/systemd/system/blackcast@.service
 ```
 [Unit]
-Description=Natrium Server
+Description=BitcoinBlack API Server
 After=network.target
 
 [Service]
 Type=simple
-User=natriumuser
+User=blackuser
 Group=www-data
-EnvironmentFile=/home/natriumuser/natriumcast/.env
-WorkingDirectory=/home/natriumuser/natriumcast
-ExecStart=/home/natriumuser/natriumcast/venv/bin/python natriumcast.py --host 127.0.0.1 --port %i --log-file /tmp/natriumcast%i.log
+EnvironmentFile=/home/blackuser/blackcast/.env
+WorkingDirectory=/home/blackuser/blackcast
+ExecStart=/home/blackuser/blackcast/venv/bin/python blackcast.py --host 127.0.0.1 --port %i --log-file /tmp/blackcast%i.log
 Restart=on-failure
 
 [Install]
@@ -94,27 +84,27 @@ WantedBy=multi-user.target
 Enable this service and start it, ensure all is working as expected
 
 ```
-sudo systemctl enable natriumcast@5076
-sudo systemctl start natriumcast@5076
-sudo systemctl status natriumcast@5076
+sudo systemctl enable blackcast@5076
+sudo systemctl start blackcast@5076
+sudo systemctl status blackcast@5076
 ```
 
 Next, configure nginx to proxy requests to this server
 
-/etc/nginx/sites-available/app.natrium.io
+/etc/nginx/sites-available/wsbeta.bitcoinblack.info
 
 ```
-upstream natrium_nodes {
+upstream black_nodes {
         least_conn;
 
         server 127.0.0.1:5076;
 }
 
 server {
-        server_name app.natrium.io;
+        server_name wsbeta.bitcoinblack.info;
 
         location / {
-                proxy_pass http://natrium_nodes;
+                proxy_pass http://black_nodes;
                 proxy_redirect off;
                 proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
                 proxy_set_header X-Real-IP $remote_addr;
@@ -132,7 +122,7 @@ server {
 Enable this configuration and restart nginx
 
 ```
-sudo ln -s /etc/nginx/sites-available/app.natrium.io /etc/nginx/sites-enabled/app.natrium.io
+sudo ln -s /etc/nginx/sites-available/wsbeta.bitcoinblack.info /etc/nginx/sites-enabled/wsbeta.bitcoinblack.info
 sudo service nginx restart
 ```
 
