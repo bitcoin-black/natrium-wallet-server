@@ -248,9 +248,9 @@ async def handle_user_message(r : web.Request, message : str, ws : web.WebSocket
                         else:
                             # Legacy connections
                             account = account_list[0]
-                        if account.replace("nano_", "xrb_") in account_list:
-                            account_list.remove(account.replace("nano_", "xrb_"))
-                            account = account.replace('xrb_', 'nano_')
+                        if account.replace("bcb_", "xrb_") in account_list:
+                            account_list.remove(account.replace("bcb_", "xrb_"))
+                            account = account.replace('xrb_', 'bcb_')
                             account_list.append(account)
                             await r.app['rdata'].hset(uid, "account", json.dumps(account_list))
                         await rpc.rpc_reconnect(ws, r, account)
@@ -275,7 +275,7 @@ async def handle_user_message(r : web.Request, message : str, ws : web.WebSocket
                             currency = request_json['currency']
                         else:
                             currency = 'usd'
-                        await rpc.rpc_subscribe(ws, r, request_json['account'].replace("nano_", "xrb_"), currency)
+                        await rpc.rpc_subscribe(ws, r, request_json['account'].replace("bcb_", "xrb_"), currency)
                         # Store FCM token if available, for push notifications
                         if 'fcm_token' in request_json:
                             await update_fcm_token_for_account(request_json['account'], request_json['fcm_token'], r)
