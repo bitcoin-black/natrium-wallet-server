@@ -6,7 +6,7 @@ class Util:
 
     def __init__(self, banano_mode : bool):
         self.banano_mode = banano_mode
-        self.raw_per_nano = 10**29 if banano_mode else 10**30
+        self.raw_per_nano = 10**28 if banano_mode else 10**30
 
     def get_request_ip(self, r : web.Request) -> str:
         host = r.headers.get('X-FORWARDED-FOR',None)
