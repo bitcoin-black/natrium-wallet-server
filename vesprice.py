@@ -1,10 +1,13 @@
-import requests, redis, json
+import requests
+import redis
+import rapidjson as json
+import os
 
-#rblocks = redis.StrictRedis(host='localhost', port=6379, db=0)
-#rwork = redis.StrictRedis(host='localhost', port=6379, db=1)
-rdata = redis.StrictRedis(host='localhost', port=6379, db=2)
+rdata = redis.StrictRedis(host=os.getenv(
+    'REDIS_HOST', 'localhost'), port=6379, db=int(os.getenv('REDIS_DB', '2')))
 
-dolartoday_price='https://s3.amazonaws.com/dolartoday/data.json'
+dolartoday_price = 'https://s3.amazonaws.com/dolartoday/data.json'
+dolarsi_ars_prices='https://www.dolarsi.com/api/api.php?type=valoresprincipales'
 
 def dolartoday_bolivar():
     response = json.loads(requests.get(url=dolartoday_price).text)
@@ -15,7 +18,22 @@ def dolartoday_bolivar():
     if bolivarprice is None:
         print("Couldn't find localbitcoin_ref price")
         return
-    print(rdata.hset("prices", "dolartoday:usd-ves", bolivarprice),"DolarToday USD-VES", bolivarprice)
+    print(rdata.hset("prices", "dolartoday:usd-ves", bolivarprice),
+          "DolarToday USD-VES", bolivarprice)
+
+def dolarsi_ars():
+    response = json.loads(requests.get(url=dolarsi_ars_prices).text)
+    print(response)
+    try:
+        price_ars_raw = response[1]['casa']['venta']
+    except KeyError:
+        print("Invalid response " + str(response))
+        return
+    price_ars = price_ars_raw.replace('.','').replace(',','.')
+    print(rdata.hset("prices", "dolarsi:usd-ars", price_ars),"DolarSi USD-ARS", price_ars)
 
 dolartoday_bolivar()
-print("DolarToday USD-VES:", rdata.hget("prices", "dolartoday:usd-ves").decode('utf-8'))
+print("DolarToday USD-VES:", rdata.hget("prices",
+                                        "dolartoday:usd-ves").decode('utf-8'))
+dolarsi_ars()
+print("DolarSi USD-ARS:", rdata.hget("prices", "dolarsi:usd-ars").decode('utf-8'))

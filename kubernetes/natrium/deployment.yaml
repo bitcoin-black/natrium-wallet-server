@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: natrium-server
+  namespace: natrium
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: natrium-server
+  template:
+    metadata:
+      labels:
+        app: natrium-server
+    spec:
+      containers:
+      - name: natrium-server
+        image: replaceme
+        resources:
+          requests:
+            cpu: 100m
+            memory: 200Mi
+          limits:
+            cpu: 500m
+            memory: 1Gi
+        ports:
+        - containerPort: 5076
+          name: api
+        command: ["/bin/bash", "-c"]
+        args: ["python natriumcast.py --host 0.0.0.0 --log-to-stdout --websocket-url ws://nano-node.nano:7078"]
+        env:
+          - name: REDIS_HOST
+            value: redis-0.redis
+          - name: REDIS_DB
+            value: "10"
+          - name: WORK_URL
+            value: http://betsy-natrium.betsy:5555
+          - name: DEBUG
+            value: "0"
+          - name: RPC_URL
+            value: http://nano-node.nano:7076
+          - name: FCM_API_KEY
+            valueFrom:
+              secretKeyRef:
+                name: natrium
+                key: fcm_api_key
+          - name: FCM_SENDER_ID
+            valueFrom:
+              secretKeyRef:
+                name: natrium
+                key: fcm_sender

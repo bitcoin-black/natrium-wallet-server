@@ -5,7 +5,7 @@ load_dotenv()
 import argparse
 import asyncio
 import ipaddress
-import json
+import rapidjson as json
 import logging
 import os
 import sys
@@ -18,9 +18,11 @@ from logging.handlers import TimedRotatingFileHandler, WatchedFileHandler
 import aiofcm
 import aioredis
 from aiohttp import ClientSession, WSMessage, WSMsgType, log, web
+import aiohttp_cors
 
 from rpc import RPC, allowed_rpc_actions
 from util import Util
+from nano_websocket import WebsocketClient
 
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
@@ -31,16 +33,17 @@ parser.add_argument('-b', '--banano', action='store_true', help='Run for BANANO 
 parser.add_argument('--host', type=str, help='Host to listen on (e.g. 127.0.0.1)', default='127.0.0.1')
 parser.add_argument('--path', type=str, help='(Optional) Path to run application on (for unix socket, e.g. /tmp/natriumapp.sock', default=None)
 parser.add_argument('-p', '--port', type=int, help='Port to listen on', default=5076)
-parser.add_argument('--redis-host', type=str, help='Redis (e.g. 127.0.0.1)', default='127.0.0.1')
-parser.add_argument('-rp', '--redis-port', type=int, help='Port redis is running on', default=6379)
+parser.add_argument('-ws', '--websocket-url', type=str, help='Nano websocket URI', default='ws://[::1]:7078')
 parser.add_argument('--log-file', type=str, help='Log file location', default='natriumcast.log')
+parser.add_argument('--log-to-stdout', action='store_true', help='Log to stdout', default=False)
+
 options = parser.parse_args()
 
 try:
     listen_host = str(ipaddress.ip_address(options.host))
     listen_port = int(options.port)
-    redis_host = str(ipaddress.ip_address(options.redis_host))
-    redis_port = int(options.redis_port)
+    redis_host = os.getenv('REDIS_HOST', 'localhost')
+    redis_port = 6379
     log_file = options.log_file
     app_path = options.path
     if app_path is None:
@@ -53,7 +56,7 @@ try:
     else:
         banano_mode = False
         print(f'Starting NATRIUM Server (NANO) {server_desc}')
-except Exception:
+except Exception as e:
     parser.print_help()
     sys.exit(0)
 
@@ -81,11 +84,11 @@ currency_list = ["BTC", "ARS", "AUD", "BRL", "CAD", "CHF", "CLP", "CNY", "CZK", 
 # Push notifications
 
 async def delete_fcm_token_for_account(account : str, token : str, r : web.Request):
-    await r.app['rfcm'].delete(token)
+    await r.app['rdata'].delete(token)
 
 async def update_fcm_token_for_account(account : str, token : str, r : web.Request, v2 : bool = False):
     """Store device FCM registration tokens in redis"""
-    redisInst = r.app['rfcm'] if v2 else r.app['rdata']
+    redisInst = r.app['rdata']
     await set_or_upgrade_token_account_list(account, token, r, v2=v2)
     # Keep a list of tokens associated with this account
     cur_list = await redisInst.get(account)
@@ -100,7 +103,7 @@ async def update_fcm_token_for_account(account : str, token : str, r : web.Reque
     await redisInst.set(account, json.dumps(cur_list))
 
 async def get_or_upgrade_token_account_list(account : str, token : str, r : web.Request, v2 : bool = False) -> list:
-    redisInst = r.app['rfcm'] if v2 else r.app['rdata']
+    redisInst = r.app['rdata']
     curTokenList = await redisInst.get(token)
     if curTokenList is None:
         return []
@@ -116,7 +119,7 @@ async def get_or_upgrade_token_account_list(account : str, token : str, r : web.
     return json.loads(await redisInst.get(token))
 
 async def set_or_upgrade_token_account_list(account : str, token : str, r : web.Request, v2 : bool = False) -> list:
-    redisInst = r.app['rfcm'] if v2 else r.app['rdata']
+    redisInst = r.app['rdata']
     curTokenList = await redisInst.get(token)
     if curTokenList is None:
         await redisInst.set(token, json.dumps([account]), expire=2592000) 
@@ -133,7 +136,7 @@ async def set_or_upgrade_token_account_list(account : str, token : str, r : web.
 
 async def get_fcm_tokens(account : str, r : web.Request, v2 : bool = False) -> list:
     """Return list of FCM tokens that belong to this account"""
-    redisInst = r.app['rfcm'] if v2 else r.app['rdata']
+    redisInst = r.app['rdata']
     tokens = await redisInst.get(account)
     if tokens is None:
         return []
@@ -345,7 +348,14 @@ async def handle_user_message(r : web.Request, message : str, ws : web.WebSocket
                     do_work = False
                     if 'do_work' in request_json and request_json['do_work'] == True:
                         do_work = True
-                    reply = await rpc.process_defer(r, uid, json.loads(request_json['block']), do_work)
+                    subtype = None
+                    if 'subtype' in request_json:
+                        subtype = request_json['subtype']
+                    if 'json_block' in request_json and request_json['json_block']:
+                        sblock = request_json['block']
+                    else:
+                        sblock = json.loads(request_json['block'])
+                    reply = await rpc.process_defer(r, uid, sblock, do_work, subtype=subtype)
                     if reply is None:
                         raise Exception
                     ret = json.dumps(reply)
@@ -466,6 +476,22 @@ async def http_api(r: web.Request):
         log.server_logger.exception("received exception in http_api")
         return web.HTTPInternalServerError(reason=f"Something went wrong {str(sys.exc_info())}")
 
+async def callback_ws(app: web.Application, data: dict):
+    if 'block' in data and 'link_as_account' in data['block']:
+        link = data['block']['link_as_account']
+        if app['subscriptions'].get(link):
+            log.server_logger.info("Pushing to clients %s", str(app['subscriptions'][link]))
+            for sub in app['subscriptions'][link]:
+                if sub in app['clients']:
+                    if data['block']['subtype'] == 'send':
+                        data['is_send'] = 'true'
+                        await app['clients'][sub].send_str(json.dumps(data))
+        # Send to natrium donations page
+        if data['block']['subtype'] == 'send' and link == 'nano_1natrium1o3z5519ifou7xii8crpxpk8y65qmkih8e8bpsjri651oza8imdd':
+            log.server_logger.info('Detected send to natrium account')
+            if 'amount' in data:
+                log.server_logger.info(f'emitting donation event for amount: {data["amount"]}')
+                await sio.emit('donation_event', {'amount':data['amount']})
 
 async def callback(r : web.Request):
     try:
@@ -475,18 +501,6 @@ async def callback(r : web.Request):
         request_json['block'] = json.loads(request_json['block'])
 
         link = request_json['block']['link_as_account']
-        if r.app['subscriptions'].get(link):
-            log.server_logger.info("Pushing to clients %s", str(r.app['subscriptions'][link]))
-            for sub in r.app['subscriptions'][link]:
-                if sub in r.app['clients']:
-                    await r.app['clients'][sub].send_str(json.dumps(request_json))
-
-        # If natrium account and send, send to web page for donations
-        if 'is_send' in request_json and (request_json['is_send'] or request_json['is_send'] == 'true') and link == 'nano_1natrium1o3z5519ifou7xii8crpxpk8y65qmkih8e8bpsjri651oza8imdd':
-            log.server_logger.info('Detected send to natrium account')
-            if 'amount' in request_json:
-                log.server_logger.info(f'emitting donation event for amount: {request_json["amount"]}')
-                await sio.emit('donation_event', {'amount':request_json['amount']})
 
         # Push FCM notification if this is a send
         if fcm_api_key is None:
@@ -555,7 +569,7 @@ async def send_prices(app):
         # empty out this set periodically, to ensure clients dont somehow get stuck when an error causes their
         # work not to return
         try:
-            if len(app['clients']):
+            if 'clients' in app and len(app['clients']):
                 log.server_logger.info('pushing price data to %d connections', len(app['clients']))
                 btc = float(await app['rdata'].hget("prices", f"{price_prefix}-btc"))
                 if banano_mode:
@@ -587,16 +601,13 @@ async def init_app():
     async def close_redis(app):
         """Close redis connections"""
         log.server_logger.info('Closing redis connections')
-        app['rfcm'].close()
         app['rdata'].close()
 
     async def open_redis(app):
         """Open redis connections"""
         log.server_logger.info("Opening redis connections")
-        app['rfcm'] = await aioredis.create_redis_pool((redis_host, redis_port),
-                                                db=1, encoding='utf-8', minsize=2, maxsize=15)
         app['rdata'] = await aioredis.create_redis_pool((redis_host, redis_port),
-                                                db=2, encoding='utf-8', minsize=2, maxsize=15)
+                                                db=int(os.getenv('REDIS_DB', '2')), encoding='utf-8', minsize=2, maxsize=15)
         # Global vars
         app['clients'] = {} # Keep track of connected clients
         app['last_msg'] = {} # Last time a client has sent a message
@@ -611,16 +622,31 @@ async def init_app():
     else:
         root = logging.getLogger('aiohttp.server')
         logging.basicConfig(level=logging.INFO)
-        handler = WatchedFileHandler(log_file)
-        formatter = logging.Formatter("%(asctime)s;%(levelname)s;%(message)s", "%Y-%m-%d %H:%M:%S %z")
-        handler.setFormatter(formatter)
-        root.addHandler(handler)
-        root.addHandler(TimedRotatingFileHandler(log_file, when="d", interval=1, backupCount=100))        
+        if options.log_to_stdout:
+            handler = logging.StreamHandler(sys.stdout)
+            formatter = logging.Formatter("%(asctime)s;%(levelname)s;%(message)s", "%Y-%m-%d %H:%M:%S %z")
+            handler.setFormatter(formatter)
+            root.addHandler(handler)
+        else:
+            handler = WatchedFileHandler(log_file)
+            formatter = logging.Formatter("%(asctime)s;%(levelname)s;%(message)s", "%Y-%m-%d %H:%M:%S %z")
+            handler.setFormatter(formatter)
+            root.addHandler(handler)
+            root.addHandler(TimedRotatingFileHandler(log_file, when="d", interval=1, backupCount=100))        
 
     app = web.Application()
+    cors = aiohttp_cors.setup(app, defaults={
+        "*": aiohttp_cors.ResourceOptions(
+                allow_credentials=True,
+                expose_headers="*",
+                allow_headers="*",
+            )
+    })    
     app.add_routes([web.get('/', websocket_handler)]) # All WS requests
     app.add_routes([web.post('/callback', callback)]) # HTTP Callback from node
-    app.add_routes([web.post('/api', http_api)])      # HTTP API
+    # HTTP API
+    users_resource = cors.add(app.router.add_resource("/api"))
+    cors.add(users_resource.add_route("POST", http_api))    
     #app.add_routes([web.post('/callback', callback)])
     app.on_startup.append(open_redis)
     app.on_shutdown.append(close_redis)
@@ -640,21 +666,28 @@ def main():
     # Start web/ws server
     async def start():
         runner = web.AppRunner(app)
+        tasks = [
+
+        ]
         await runner.setup()
         if app_path is not None:
             site = web.UnixSite(runner, app_path)
         else:
             site = web.TCPSite(runner, listen_host, listen_port)
-        await site.start()
+        tasks.append(site.start())
+        # Websocket
+        log.server_logger.info(f"Attempting to open WS connection to {options.websocket_url}")
+        ws = WebsocketClient(app, options.websocket_url, callback_ws)
+        await ws.setup()
+        tasks.append(ws.loop())
+        await asyncio.wait(tasks)
 
     async def end():
         await app.shutdown()
 
-    loop.run_until_complete(start())
-
     # Main program
     try:
-        loop.run_forever()
+        loop.run_until_complete(start())
     except KeyboardInterrupt:
         pass
     finally:

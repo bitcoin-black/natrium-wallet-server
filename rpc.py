@@ -1,4 +1,4 @@
-import json
+import rapidjson as json
 import sys
 import time
 
@@ -10,7 +10,7 @@ from util import Util
 allowed_rpc_actions = ["account_balance", "account_block_count", "account_check", "account_info", "account_history",
                        "account_representative", "account_subscribe", "account_weight", "accounts_balances",
                        "accounts_frontiers", "accounts_pending", "available_supply", "block", "block_hash",
-                       "block_create", "blocks", "block_info", "blocks_info", "block_account", "block_count", "block_count_type",
+                       "blocks", "block_info", "blocks_info", "block_account", "block_count", "block_count_type",
                        "chain", "delegators", "delegators_count", "frontiers", "frontier_count", "history",
                        "key_expand", "process", "representatives", "republish", "peers", "version", "pending",
                        "pending_exists", "price_data", "fcm_update"]
@@ -23,7 +23,7 @@ class RPC:
         self.util = Util(banano_mode)
         self.price_prefix = price_prefix
 
-    async def json_post(self, request_json : dict, timeout : int = 30, is_work : bool = False) -> dict:
+    async def json_post(self, request_json : dict, timeout : int = 90, is_work : bool = False) -> dict:
         try:
             async with ClientSession() as session:
                 async with session.post(self.work_url if is_work and self.work_url is not None else self.node_url, json=request_json, timeout=timeout) as resp:
@@ -32,7 +32,7 @@ class RPC:
                         raise Exception
                     return await resp.json(content_type=None)
         except Exception:
-            log.server_logger.exception()
+            log.server_logger.exception("exception in json_post")
             return None
 
     async def get_pending_count(self, r : web.Request, account : str, uid : str = '0') -> int:
@@ -180,18 +180,18 @@ class RPC:
             r.app['active_work'].remove(request_json['hash'])
             return response
         except Exception:
-            log.server_logger.exception()
+            log.server_logger.exception('in work defer')
             r.app['active_work'].remove(request_json['hash'])
             return None
 
     # Server-side check for any incidental mixups due to race conditions or misunderstanding protocol.
     # Check blocks submitted for processing to ensure the user or client has not accidentally created a send to an unknown
     # address due to balance miscalculation leading to the state block being interpreted as a send rather than a receive.
-    async def process_defer(self, r : web.Request, uid : str, block : dict, do_work : bool) -> dict:
+    async def process_defer(self, r : web.Request, uid : str, block : dict, do_work : bool, subtype: str = None) -> dict:
         # Let's cache the link because, due to callback delay it's possible a client can receive
         # a push notification for a block it already knows about
-        is_change = False
-        if 'link' in block:
+        is_change = True if subtype == 'change' else False
+        if not is_change and 'link' in block:
             if block['link'].replace('0', '') == '':
                 is_change = True
             else:
@@ -249,9 +249,12 @@ class RPC:
                     workbase = self.util.pubkey(block['account'])
                 else:
                     workbase = block['previous']
+                difficulty = 'fffffe0000000000' if self.banano_mode else 'ffffffc000000000' if subtype == 'receive' else 'fffffff800000000'
                 work_response = await self.work_request({
                     'action': 'work_generate',
-                    'hash': workbase
+                    'hash': workbase,
+                    'difficulty': difficulty,
+                    'reward': False
                 })
                 if work_response is None or 'work' not in work_response:
                     return {
@@ -268,7 +271,9 @@ class RPC:
             'action':'process',
             'block': json.dumps(block)
         }
-        if is_change:
+        if subtype is not None:
+            process_request['subtype'] = subtype
+        elif is_change:
             process_request['subtype'] = 'change'
 
         return await self.json_post(process_request)
